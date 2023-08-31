@@ -72,8 +72,6 @@ async def predict(
 ) -> str:
     pdfbin = file.file.read()
     pdf = fitz.open("pdf", pdfbin)
-    md5 = hashlib.md5(pdfbin).hexdigest()
-    save_path = SAVE_DIR / md5
 
     if start is not None and stop is not None:
         pages = list(range(start - 1, stop))
@@ -81,17 +79,6 @@ async def predict(
         pages = list(range(len(pdf)))
     predictions = [""] * len(pages)
     dellist = []
-    if save_path.exists():
-        for computed in (save_path / "pages").glob("*.mmd"):
-            try:
-                idx = int(computed.stem) - 1
-                if idx in pages:
-                    i = pages.index(idx)
-                    print("skip page", idx + 1)
-                    predictions[i] = computed.read_text(encoding="utf-8")
-                    dellist.append(idx)
-            except Exception as e:
-                print(e)
     compute_pages = pages.copy()
     for el in dellist:
         compute_pages.remove(el)
@@ -134,18 +121,7 @@ async def predict(
                 markdown_compatible(output) + disclaimer
             )
 
-    (save_path / "pages").mkdir(parents=True, exist_ok=True)
-    pdf.save(save_path / "doc.pdf")
-    if len(images) > 0:
-        thumb = Image.open(images[0])
-        thumb.thumbnail((400, 400))
-        thumb.save(save_path / "thumb.jpg")
-    for idx, page_num in enumerate(pages):
-        (save_path / "pages" / ("%02d.mmd" % (page_num + 1))).write_text(
-            predictions[idx], encoding="utf-8"
-        )
     final = "".join(predictions).strip()
-    (save_path / "doc.mmd").write_text(final, encoding="utf-8")
     return final
 
 

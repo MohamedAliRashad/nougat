@@ -117,9 +117,7 @@ async def predict(
             else:
                 disclaimer = ""
 
-            predictions[pages.index(compute_pages[idx * BATCHSIZE + j])] = (
-                markdown_compatible(output) + disclaimer
-            )
+            predictions[pages.index(compute_pages[idx * BATCHSIZE + j])] = markdown_compatible(output)
 
     final = "".join(predictions).strip()
     return final

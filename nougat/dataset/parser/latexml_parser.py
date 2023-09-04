@@ -69,6 +69,13 @@ def parse_latexml_authors(ltx_authors: BeautifulSoup) -> List[Author]:
 
 
 def parse_latexml_citations(cite: BeautifulSoup, parent: Element) -> None:
+    """
+    Parses LaTeXML citations and appends them as children to the given parent element.
+
+    Args:
+        cite (BeautifulSoup): The BeautifulSoup object containing the citation data.
+        parent (Element): The parent element to which the citations will be added as children.
+    """
     parse_latexml_children(cite, parent)
     if ("[" in parent.plaintext and "]" in parent.plaintext) or re.search(
         r"[A-Za-z]", parent.plaintext
@@ -89,6 +96,13 @@ def _clean_html_whitespace(text: str) -> str:
 
 
 def parse_latexml_children(html: BeautifulSoup, parent: Element) -> None:
+    """
+    Parses LaTeXML children and appends them as appropriate elements to the given parent element.
+
+    Args:
+        html (BeautifulSoup): The BeautifulSoup object containing the HTML data.
+        parent (Element): The parent element to which the parsed children will be added.
+    """
     if html is None:
         return
     for child in html.children:
@@ -341,7 +355,7 @@ def parse_latexml_children(html: BeautifulSoup, parent: Element) -> None:
                 line = alg.add_line(Element())
                 parse_latexml_children(child, line)
             else:
-                printerr("Listing line outside algorith environment", file=sys.stderr)
+                printerr("Listing line outside algorithm environment", file=sys.stderr)
         elif sv.match("dl.ltx_description", child):
             def_list = parent.append(DefinitionList())
             parse_latexml_children(child, def_list)

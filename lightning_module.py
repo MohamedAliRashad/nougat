@@ -9,9 +9,9 @@ import random
 from pathlib import Path
 
 import numpy as np
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
-from pytorch_lightning.utilities import rank_zero_only
+from lightning.pytorch.utilities import rank_zero_only
 from torch.nn.utils.rnn import pad_sequence
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
@@ -23,6 +23,7 @@ from nougat.metrics import get_metrics
 class NougatModelPLModule(pl.LightningModule):
     def __init__(self, config):
         super().__init__()
+        self.validation_step_outputs = []
         self.config = config
         if self.config.get("model_path", False):
             self.model = NougatModel.from_pretrained(
@@ -91,17 +92,30 @@ class NougatModelPLModule(pl.LightningModule):
         gts = self.model.decoder.tokenizer.batch_decode(
             markdown, skip_special_tokens=True
         )
-        metrics = get_metrics(gts, preds)
+        metrics = get_metrics(gts, preds, pool=False)
         scores = {
             "val/" + key: sum(values) / len(values) for key, values in metrics.items()
         }
+        self.validation_step_outputs.append(scores)
         return scores
 
-    def validation_epoch_end(self, validation_step_outputs):
-        if validation_step_outputs is not None and len(validation_step_outputs) >= 1:
-            self.log_dict(validation_step_outputs[0], sync_dist=True)
+    def on_validation_epoch_end(self):
+        if (
+            self.validation_step_outputs is not None
+            and len(self.validation_step_outputs) >= 1
+        ):
+            self.log_dict(self.validation_step_outputs[0], sync_dist=True)
+            self.validation_step_outputs.clear()
 
     def configure_optimizers(self):
+        def _get_device_count():
+            if torch.cuda.is_available():
+                return torch.cuda.device_count()
+            elif torch.backends.mps.is_available():
+                # Can MPS have more than one device?
+                return 1
+            return 1
+
         max_iter = None
 
         if int(self.config.get("max_epochs", -1)) > 0:
@@ -113,7 +127,7 @@ class NougatModelPLModule(pl.LightningModule):
                 1,
                 (
                     self.config.train_batch_sizes[0]
-                    * torch.cuda.device_count()
+                    * _get_device_count()
                     * self.config.get("num_nodes", 1)
                 ),
             )

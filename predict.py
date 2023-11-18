@@ -10,26 +10,19 @@ import logging
 import re
 import argparse
 import re
+import os
 from functools import partial
 import torch
 from torch.utils.data import ConcatDataset
 from tqdm import tqdm
 from nougat import NougatModel
 from nougat.utils.dataset import LazyDataset
+from nougat.utils.device import move_to_device, default_batch_size
 from nougat.utils.checkpoint import get_checkpoint
 from nougat.postprocessing import markdown_compatible
-import fitz
+import pypdf
 
 logging.basicConfig(level=logging.INFO)
-
-if torch.cuda.is_available():
-    BATCH_SIZE = int(
-        torch.cuda.get_device_properties(0).total_memory / 1024 / 1024 / 1000 * 0.3
-    )
-else:
-    # don't know what a good value is here. Would not recommend to run on CPU
-    BATCH_SIZE = 5
-    logging.warning("No GPU found. Conversion on CPU is very slow.")
 
 
 def get_args():
@@ -38,7 +31,7 @@ def get_args():
         "--batchsize",
         "-b",
         type=int,
-        default=BATCH_SIZE,
+        default=default_batch_size(),
         help="Batch size to use.",
     )
     parser.add_argument(
@@ -48,19 +41,51 @@ def get_args():
         default=None,
         help="Path to checkpoint directory.",
     )
+    parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        default="0.1.0-small",
+        help=f"Model tag to use.",
+    )
     parser.add_argument("--out", "-o", type=Path, help="Output directory.")
-    parser.add_argument("--recompute",
-                        action="store_true",
-                        help="Recompute already computed PDF, discarding previous predictions.")
+    parser.add_argument(
+        "--recompute",
+        action="store_true",
+        help="Recompute already computed PDF, discarding previous predictions.",
+    )
+    parser.add_argument(
+        "--full-precision",
+        action="store_true",
+        help="Use float32 instead of bfloat16. Can speed up CPU conversion for some setups.",
+    )
+    parser.add_argument(
+        "--no-markdown",
+        dest="markdown",
+        action="store_false",
+        help="Do not add postprocessing step for markdown compatibility.",
+    )
     parser.add_argument(
         "--markdown",
         action="store_true",
-        help="Add postprocessing step for markdown compatibility.",
+        help="Add postprocessing step for markdown compatibility (default).",
+    )
+    parser.add_argument(
+        "--no-skipping",
+        dest="skipping",
+        action="store_false",
+        help="Don't apply failure detection heuristic.",
+    )
+    parser.add_argument(
+        "--pages",
+        "-p",
+        type=str,
+        help="Provide page numbers like '1-4,7' for pages 1 through 4 and page 7. Only works for single PDF input.",
     )
     parser.add_argument("pdf", nargs="+", type=Path, help="PDF(s) to process.")
     args = parser.parse_args()
     if args.checkpoint is None or not args.checkpoint.exists():
-        args.checkpoint = get_checkpoint(args.checkpoint)
+        args.checkpoint = get_checkpoint(args.checkpoint, model_tag=args.model)
     if args.out is None:
         logging.warning("No output directory. Output will be printed to console.")
     else:
@@ -73,19 +98,37 @@ def get_args():
     if len(args.pdf) == 1 and not args.pdf[0].suffix == ".pdf":
         # input is a list of pdfs
         try:
-            args.pdf = [
-                Path(l) for l in open(args.pdf[0]).read().split("\n") if len(l) > 0
-            ]
+            pdfs_path = args.pdf[0]
+            if pdfs_path.is_dir():
+                args.pdf = list(pdfs_path.rglob("*.pdf"))
+            else:
+                args.pdf = [
+                    Path(l) for l in open(pdfs_path).read().split("\n") if len(l) > 0
+                ]
+            logging.info(f"Found {len(args.pdf)} files.")
         except:
             pass
+    if args.pages and len(args.pdf) == 1:
+        pages = []
+        for p in args.pages.split(","):
+            if "-" in p:
+                start, end = p.split("-")
+                pages.extend(range(int(start) - 1, int(end)))
+            else:
+                pages.append(int(p) - 1)
+        args.pages = pages
+    else:
+        args.pages = None
     return args
 
 
 def main():
     args = get_args()
-    model = NougatModel.from_pretrained(args.checkpoint).to(torch.bfloat16)
-    if torch.cuda.is_available():
-        model.to("cuda")
+    model = NougatModel.from_pretrained(args.checkpoint)
+    model = move_to_device(model, bf16=not args.full_precision, cuda=args.batchsize > 0)
+    if args.batchsize <= 0:
+        # set batch size to 1. Need to check if there are benefits for CPU conversion for >1
+        args.batchsize = 1
     model.eval()
     datasets = []
     for pdf in args.pdf:
@@ -100,9 +143,11 @@ def main():
                 continue
         try:
             dataset = LazyDataset(
-                pdf, partial(model.encoder.prepare_input, random_padding=False)
+                pdf,
+                partial(model.encoder.prepare_input, random_padding=False),
+                args.pages,
             )
-        except fitz.fitz.FileDataError:
+        except pypdf.errors.PdfStreamError:
             logging.info(f"Could not load file {str(pdf)}.")
             continue
         datasets.append(dataset)
@@ -119,7 +164,9 @@ def main():
     file_index = 0
     page_num = 0
     for i, (sample, is_last_page) in enumerate(tqdm(dataloader)):
-        model_output = model.inference(image_tensors=sample)
+        model_output = model.inference(
+            image_tensors=sample, early_stopping=args.skipping
+        )
         # check if model output is faulty
         for j, output in enumerate(model_output["predictions"]):
             if page_num == 0:
@@ -131,8 +178,7 @@ def main():
             if output.strip() == "[MISSING_PAGE_POST]":
                 # uncaught repetitions -- most likely empty page
                 predictions.append(f"\n\n[MISSING_PAGE_EMPTY:{page_num}]\n\n")
-                continue
-            if model_output["repeats"][j] is not None:
+            elif args.skipping and model_output["repeats"][j] is not None:
                 if model_output["repeats"][j] > 0:
                     # If we end up here, it means the output is most likely not complete and was truncated.
                     logging.warning(f"Skipping page {page_num} due to repetitions.")

@@ -48,13 +48,14 @@ setup(
         "orjson",
         "opencv-python-headless",
         "datasets[vision]",
-        "pytorch-lightning>=1.8.5",
+        "lightning>=2.0.0,<2022",
         "nltk",
         "python-Levenshtein",
         "sentencepiece",
         "sconf>=0.2.3",
-        "albumentations",
-        "pymupdf",
+        "albumentations>=1.0.0",
+        "pypdf>=3.1.0",
+        "pypdfium2",
     ],
     extras_require={
         "api": [
@@ -71,6 +72,7 @@ setup(
             "fuzzysearch",
             "unidecode",
             "htmlmin",
+            "pdfminer.six>=20221105",
         ],
     },
     entry_points={

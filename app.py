@@ -13,25 +13,27 @@ from PIL import Image
 from pathlib import Path
 import hashlib
 from fastapi.middleware.cors import CORSMiddleware
-import fitz
+import pypdfium2
 import torch
 from nougat import NougatModel
 from nougat.postprocessing import markdown_compatible, close_envs
 from nougat.utils.dataset import ImageDataset
 from nougat.utils.checkpoint import get_checkpoint
 from nougat.dataset.rasterize import rasterize_paper
+from nougat.utils.device import move_to_device, default_batch_size
 from tqdm import tqdm
 
+
 SAVE_DIR = Path("./pdfs")
-BATCHSIZE = os.environ.get("NOUGAT_BATCHSIZE", 6)
+BATCHSIZE = int(os.environ.get("NOUGAT_BATCHSIZE", default_batch_size()))
 NOUGAT_CHECKPOINT = get_checkpoint()
 if NOUGAT_CHECKPOINT is None:
     print(
-        "Set environment variable 'NOUGAT_CHECKPOINT' with a path to the model checkpoint!."
+        "Set environment variable 'NOUGAT_CHECKPOINT' with a path to the model checkpoint!"
     )
     sys.exit(1)
 
-app = FastAPI(title="LaTeX-OCR API")
+app = FastAPI(title="Nougat API")
 origins = ["http://localhost", "http://127.0.0.1"]
 
 app.add_middleware(
@@ -48,11 +50,12 @@ model = None
 async def load_model(
     checkpoint: str = NOUGAT_CHECKPOINT,
 ):
-    global model
+    global model, BATCHSIZE
     if model is None:
-        model = NougatModel.from_pretrained(checkpoint).to(torch.bfloat16)
-        if torch.cuda.is_available():
-            model.to("cuda")
+        model = NougatModel.from_pretrained(checkpoint)
+        model = move_to_device(model, cuda=BATCHSIZE > 0)
+        if BATCHSIZE <= 0:
+            BATCHSIZE = 1
         model.eval()
 
 

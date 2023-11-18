@@ -5,7 +5,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 """
 """
-This script creates an index of all available pages and parses the meta data for all pages into a seperate file.
+This script creates an index of all available pages and parses the meta data for all pages into a separate file.
 Optionally TesseractOCR is called for each image.
 """
 import argparse
@@ -51,15 +51,7 @@ def read_metadata(data: Dict) -> List[List[Dict]]:
             if "captionBoundary" in item:
                 item["captionBoundary"] = convert_pt2px(item["captionBoundary"])
             out[p].append(item)
-    # Save mupdf meta data (not needed)
-    # if "mupdf" in data:
-    #     for block in data["mupdf"]:
-    #         p = block.pop("page", None)
-    #         if p is None or p >= N:
-    #             continue
-    #         block["source"] = "mu"
-    #         block["bbox"] = convert_pt2px(block["bbox"])
-    #         out[p].append(block)
+
     return out
 
 

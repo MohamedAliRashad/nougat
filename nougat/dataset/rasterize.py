@@ -5,16 +5,18 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 """
 import argparse
-import fitz
+import logging
+import pypdfium2
 from pathlib import Path
 from tqdm import tqdm
 import io
-from PIL import Image
-from typing import Optional, List
+from typing import Optional, List, Union
+
+logging.getLogger("pypdfium2").setLevel(logging.WARNING)
 
 
 def rasterize_paper(
-    pdf: Path,
+    pdf: Union[Path, bytes],
     outpath: Optional[Path] = None,
     dpi: int = 96,
     return_pil=False,
@@ -33,24 +35,28 @@ def rasterize_paper(
     Returns:
         Optional[List[io.BytesIO]]: The PIL images if `return_pil` is True, otherwise None.
     """
-
     pils = []
     if outpath is None:
         return_pil = True
     try:
         if isinstance(pdf, (str, Path)):
-            pdf = fitz.open(pdf)
+            pdf = pypdfium2.PdfDocument(pdf)
         if pages is None:
             pages = range(len(pdf))
-        for i in pages:
-            page_bytes: bytes = pdf[i].get_pixmap(dpi=dpi).pil_tobytes(format="PNG")
+        renderer = pdf.render(
+            pypdfium2.PdfBitmap.to_pil,
+            page_indices=pages,
+            scale=dpi / 72,
+        )
+        for i, image in zip(pages, renderer):
             if return_pil:
-                pils.append(io.BytesIO(page_bytes))
+                page_bytes = io.BytesIO()
+                image.save(page_bytes, "bmp")
+                pils.append(page_bytes)
             else:
-                with (outpath / ("%02d.png" % (i + 1))).open("wb") as f:
-                    f.write(page_bytes)
-    except Exception:
-        pass
+                image.save((outpath / ("%02d.png" % (i + 1))), "png")
+    except Exception as e:
+        logging.error(e)
     if return_pil:
         return pils
 

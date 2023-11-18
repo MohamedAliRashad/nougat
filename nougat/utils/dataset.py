@@ -12,9 +12,10 @@ from functools import partial
 import random
 from typing import Dict, Tuple, Callable
 from PIL import Image, UnidentifiedImageError
+from typing import List, Optional
 
 import torch
-import fitz
+import pypdf
 import orjson
 from torch.utils.data import Dataset
 from transformers.modeling_utils import PreTrainedModel
@@ -35,6 +36,7 @@ class ImageDataset(torch.utils.data.Dataset):
         img_list (list): List of image paths.
         prepare (Callable): The preparation function.
     """
+
     def __init__(self, img_list, prepare: Callable):
         super().__init__()
         self.img_list = img_list
@@ -59,8 +61,8 @@ class ImageDataset(torch.utils.data.Dataset):
         try:
             img = Image.open(self.img_list[idx])
             return self.prepare(img)
-        except:
-            return
+        except Exception as e:
+            logging.error(e)
 
 
 class LazyDataset(Dataset):
@@ -77,13 +79,14 @@ class LazyDataset(Dataset):
     Attributes:
         name (str): Name of the PDF document.
     """
-    def __init__(self, pdf, prepare: Callable):
+
+    def __init__(self, pdf, prepare: Callable, pages: Optional[List[int]] = None):
         super().__init__()
         self.prepare = prepare
         self.name = str(pdf)
-        self.init_fn = partial(rasterize_paper, pdf)
+        self.init_fn = partial(rasterize_paper, pdf, pages=pages)
         self.dataset = None
-        self.size = len(fitz.open(pdf))
+        self.size = len(pypdf.PdfReader(pdf).pages) if pages is None else len(pages)
 
     def __len__(self):
         return self.size
@@ -99,7 +102,7 @@ class LazyDataset(Dataset):
     @staticmethod
     def ignore_none_collate(batch):
         if batch is None:
-            return
+            return None, None
         try:
             _batch = []
             for i, x in enumerate(batch):
@@ -112,10 +115,11 @@ class LazyDataset(Dataset):
                     elif len(batch) > 1:
                         _batch.append((batch[1][0] * 0, name))
             if len(_batch) == 0:
-                return
+                return None, None
             return torch.utils.data.dataloader.default_collate(_batch)
         except AttributeError:
             pass
+        return None, None
 
 
 class SciPDFDataset(Dataset):
@@ -134,6 +138,7 @@ class SciPDFDataset(Dataset):
     Attributes:
         empty_sample: Placeholder for empty samples.
     """
+
     empty_sample = None
 
     def __init__(
